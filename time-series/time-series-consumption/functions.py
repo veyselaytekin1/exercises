@@ -10,6 +10,7 @@ import warnings
 from sklearn.metrics import mean_absolute_error
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import TimeSeriesSplit 
+from joblib import load
 
 
 def get_consumption_data(start_date, end_date):
@@ -19,6 +20,16 @@ def get_consumption_data(start_date, end_date):
     df = pd.DataFrame(json_data['body']['hourlyConsumptions']).iloc[:-1] # the last value can not comes right.
     df['date'] = pd.to_datetime(df.date.str[:16])
     return df
+
+def get_dataframe_with_forecast_time(df, fh):
+    fh_new = fh*24 + 1
+    date = pd.date_range(start=df.date.tail(1).iloc[0], periods=fh_new, freq='H', name='date')
+    date = pd.DataFrame(date)
+    df_fea_eng = pd.merge(df, date, how='outer')
+    return df_fea_eng
+
+
+
 
 def data_features(df):  # jupyter notebook icinde bu 
     df_copy = df.copy()
@@ -31,6 +42,7 @@ def data_features(df):  # jupyter notebook icinde bu
     df_copy['dayofmonth'] = df_copy['date'].dt.day
     df_copy['weekofyear'] = df_copy['date'].dt.isocalendar().week
     return(df_copy)
+
 
 
 
@@ -48,6 +60,30 @@ def rolling_feature(df, fh):
     for l in lags:
         df_copy['consuption_lag_'+str(l)]=df_copy['consumption'].shift(l)
     return df_copy
+
+
+def get_dataframe_befor_training(df, fh_new):
+    df_fea_eng = df_fea_eng[fh_new+30:].reset_index(drop=True)
+    split_date = df_fea_eng.date.tail(fh_new).iloc[0]
+    historical = df_fea_eng.loc[df_fea_eng['date'] <= split_date]
+    y = historical[['date','consumption']].set_index('date')
+    X = historical.drop('consumption', axis=1).set_index('date')
+    forecast_df = df_fea_eng.loc[df_fea_eng['date'] > split_date].set_index('date').drop('consumption', axis=1)
+    return X, y, forecast_df
+
+
+def use_saved_model(forecast_df):
+    unseen_preds = []
+    model = load('model_for_consumption.joblib')
+    forecast_predcited = model.predict(forecast_df)
+    unseen_preds.append(forecast_predcited)
+    forecasted=pd.DataFrame(unseen_preds,columns=["forecasting"]).set_index(forecast_df.index)
+    return forecasted
+
+
+
+
+
 
 
 
