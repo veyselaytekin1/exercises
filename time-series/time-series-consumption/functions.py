@@ -12,6 +12,10 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import TimeSeriesSplit 
 from joblib import load
 
+def select_period(period):
+    periods = {'1 day' : 24, '2 days' : 48, '3 days' : 72, '1 week' : 168, '2 weeks' : 336}
+    return periods[period]
+
 
 def get_consumption_data(start_date, end_date):
     url="https://seffaflik.epias.com.tr/transparency/service/consumption/real-time-consumption?startDate="+f'{start_date}'+"&endDate="+f'{end_date}'
@@ -22,7 +26,7 @@ def get_consumption_data(start_date, end_date):
     return df
 
 def get_dataframe_with_forecast_time(df, fh):
-    fh_new = fh*24 + 1
+    fh_new = fh + 1
     date = pd.date_range(start=df.date.tail(1).iloc[0], periods=fh_new, freq='H', name='date')
     date = pd.DataFrame(date)
     df_fea_eng = pd.merge(df, date, how='outer')
@@ -79,6 +83,14 @@ def use_saved_model(forecast_df):
     unseen_preds.append(forecast_predcited)
     forecasted=pd.DataFrame(unseen_preds,columns=["forecasting"]).set_index(forecast_df.index)
     return forecasted
+
+
+def get_plot(df_fea_eng, forecasted, fh_new):
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter(x=df_fea_eng.date.iloc[-fh_new*5:], y=df_fea_eng.consumption.iloc[-fh_new*5:], name = 'Historical Data', mode = 'lines'))
+    fig1.add_trace(go.Scatter(x=forecasted.index, y=forecasted['forecasting'], name = 'Historical Data', mode = 'lines'))
+    return fig1
+
 
 
 
