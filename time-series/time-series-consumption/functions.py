@@ -12,90 +12,95 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import TimeSeriesSplit 
 from joblib import load
 
+
 def select_period(period):
-    periods = {'1 day' : 24, '2 days' : 48, '3 days' : 72, '1 week' : 168, '2 weeks' : 336}
+    periods={"1 Tag":24,"2 Tage":48,"3 Tage":72,"1 Woche":168,"2 Wochen":336}
     return periods[period]
 
 
-def get_consumption_data(start_date, end_date):
-    url="https://seffaflik.epias.com.tr/transparency/service/consumption/real-time-consumption?startDate="+f'{start_date}'+"&endDate="+f'{end_date}'
-    response = requests.get(url, verify=False)
+def get_consumption_data(start_date,end_date):
+    url = "https://seffaflik.epias.com.tr/transparency/service/consumption/real-time-consumption?startDate="+f'{start_date}'+"&endDate="+f'{end_date}'
+    response = requests.get(url,verify=False)
     json_data = json.loads(response.text.encode('utf8'))
-    df = pd.DataFrame(json_data['body']['hourlyConsumptions']).iloc[:-1] # the last value can not comes right.
-    df['date'] = pd.to_datetime(df.date.str[:16])
+    df = pd.DataFrame(json_data["body"]["hourlyConsumptions"]).iloc[:-1]
+    df['date']=pd.to_datetime(df.date.str[:16])
     return df
 
-def get_dataframe_with_forecast_time(df, fh):
-    fh_new = fh + 1
+
+def date_features(df):
+    df_c=df.copy()
+    df_c['month'] = df_c['date'].dt.month
+    df_c['year'] = df_c['date'].dt.year
+    df_c['hour'] = df_c['date'].dt.hour
+    df_c['quarter'] = df_c['date'].dt.quarter
+    df_c['dayofweek'] = df_c['date'].dt.dayofweek
+    df_c['dayofyear'] = df_c['date'].dt.dayofyear
+    df_c['dayofmonth'] = df_c['date'].dt.day
+    df_c['weekofyear'] = df_c['date'].dt.isocalendar().week
+    return df_c
+
+
+def rolling_features(df,fh):
+    df_c=df.copy()
+    rolling_windows=[fh,fh+3,fh+10,fh+15,fh+20,fh+25]
+    lags=[fh,fh+5,fh+10,fh+15,fh+20,fh+30]
+    for a in rolling_windows:
+        df_c['rolling_mean_'+str(a)]=df_c['consumption'].rolling(a,min_periods=1).mean().shift(1)
+        df_c['rolling_std_'+str(a)]=df_c['consumption'].rolling(a,min_periods=1).std().shift(1)
+        df_c['rolling_min_'+str(a)]=df_c['consumption'].rolling(a,min_periods=1).min().shift(1)
+        df_c['rolling_max_'+str(a)]=df_c['consumption'].rolling(a,min_periods=1).max().shift(1)
+        df_c['rolling_var_'+str(a)]=df_c['consumption'].rolling(a,min_periods=1).var().shift(1)
+    for l in lags:
+        df_c['consumption_lag_'+str(l)]=df_c['consumption'].shift(l)
+
+    return df_c
+
+
+def forecast_func(df, fh):
+    fh_new = fh + 1                             # forecast horizon weekly -we are adding +1 because by indexing we are gonna lost a line, +1 yapinca yine günün ayni saatine denk geliyor 22:00 ise yine 22:00 de oluyor
     date = pd.date_range(start=df.date.tail(1).iloc[0], periods=fh_new, freq='H', name='date')
     date = pd.DataFrame(date)
     df_fea_eng = pd.merge(df, date, how='outer')
-    return df_fea_eng
 
-
-
-
-def data_features(df):  # jupyter notebook icinde bu 
-    df_copy = df.copy()
-    df_copy['month'] = df_copy['date'].dt.month
-    df_copy['year'] = df_copy['date'].dt.year
-    df_copy['hour'] = df_copy['date'].dt.hour
-    df_copy['quarter'] = df_copy['date'].dt.quarter
-    df_copy['dayofweek'] = df_copy['date'].dt.dayofweek
-    df_copy['dayofyear'] = df_copy['date'].dt.dayofyear
-    df_copy['dayofmonth'] = df_copy['date'].dt.day
-    df_copy['weekofyear'] = df_copy['date'].dt.isocalendar().week
-    return(df_copy)
-
-
-
-
-
-def rolling_feature(df, fh):
-    df_copy = df.copy()                                           
-    rolling_windows = [fh, fh+3, fh+10, fh+15, fh+20, fh+25]
-    lags = [fh, fh+5, fh+10, fh+15, fh+20, fh+30]
-    for a in rolling_windows:
-        df_copy['rolling_mean_'+ str(a)] = df_copy['consumption'].rolling(a, min_periods=1).mean().shift(1)    
-        df_copy['rolling_std_'+ str(a)] = df_copy['consumption'].rolling(a, min_periods=1).std().shift(1)
-        df_copy['rolling_min_'+ str(a)] = df_copy['consumption'].rolling(a, min_periods=1).min().shift(1)
-        df_copy['rolling_max_'+ str(a)] = df_copy['consumption'].rolling(a, min_periods=1).max().shift(1)
-        df_copy['rolling_var_'+ str(a)] = df_copy['consumption'].rolling(a, min_periods=1).var().shift(1)
-    for l in lags:
-        df_copy['consuption_lag_'+str(l)]=df_copy['consumption'].shift(l)
-    return df_copy
-
-
-def get_dataframe_befor_training(df, fh_new):
+    # feature engineering
+    df_fea_eng = rolling_features(df_fea_eng, fh_new)
+    df_fea_eng = date_features(df_fea_eng)
     df_fea_eng = df_fea_eng[fh_new+30:].reset_index(drop=True)
+
+    # train test split
     split_date = df_fea_eng.date.tail(fh_new).iloc[0]
-    historical = df_fea_eng.loc[df_fea_eng['date'] <= split_date]
+    historical = df_fea_eng.loc[df_fea_eng['date'] <= split_date] 
     y = historical[['date','consumption']].set_index('date')
     X = historical.drop('consumption', axis=1).set_index('date')
     forecast_df = df_fea_eng.loc[df_fea_eng['date'] > split_date].set_index('date').drop('consumption', axis=1)
-    return X, y, forecast_df
 
-
-def use_saved_model(forecast_df):
+    tscv = TimeSeriesSplit(n_splits=3, test_size=fh_new * 20)
+    score_list = []
+    fold = 1
     unseen_preds = []
-    model = load('model_for_consumption.joblib')
-    forecast_predcited = model.predict(forecast_df)
-    unseen_preds.append(forecast_predcited)
-    forecasted=pd.DataFrame(unseen_preds,columns=["forecasting"]).set_index(forecast_df.index)
-    return forecasted
+    importance = []
 
+    for train_index, test_index in tscv.split(X, y): # burda aslinda datayi bölüyoruz bir altta ciktisi var train_index ne demek oldugunun
+        X_train, X_val = X.iloc[train_index], X.iloc[test_index]
+        y_train, y_val = y.iloc[train_index], y.iloc[test_index]
+        print(X_train.shape, X_val.shape)
+        rf = RandomForestRegressor(n_estimators=3, random_state=42)
+        rf.fit(X_train, y_train)
 
-def get_plot(df_fea_eng, forecasted, fh_new):
+        forecast_predcited = rf.predict(forecast_df)
+        unseen_preds.append(forecast_predcited) # 3 cross validation sonuclari gelecek galiba n_split=3 oldugu icin. cünkü time serimzi 3 parcaya bölmüstü
+        score = mean_absolute_error(y_val, rf.predict(X_val))
+        print(f"MAE FOLD - {fold}: {score}")
+        score_list.append(score)
+        importance.append(rf.feature_importances_) # burdanda 3 farkli sonuclar gelecek
+        fold += 1
+
+    print("CV Mean Score: ", np.mean(score_list))
+
+    forecasted=pd.DataFrame(unseen_preds[2],columns=["forecasting"]).set_index(forecast_df.index)
+
     fig1 = go.Figure()
     fig1.add_trace(go.Scatter(x=df_fea_eng.date.iloc[-fh_new*5:], y=df_fea_eng.consumption.iloc[-fh_new*5:], name = 'Historical Data', mode = 'lines'))
-    fig1.add_trace(go.Scatter(x=forecasted.index, y=forecasted['forecasting'], name = 'Historical Data', mode = 'lines'))
+    fig1.add_trace(go.Scatter(x=forecasted.index, y=forecasted['forecasting'], name = 'Tarihsel Veri', mode = 'lines'))
     return fig1
-
-
-
-
-
-
-
-
 
